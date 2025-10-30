@@ -1,5 +1,5 @@
 # =================================================================
-# Contenido para el archivo 'aplicar_logon.ps1' en GitHub
+# Contenido para el archivo 'autologon.ps1' en GitHub
 # Este script aplica la configuración de AutoAdminLogon
 # Requiere ser ejecutado como Administrador.
 # =================================================================
