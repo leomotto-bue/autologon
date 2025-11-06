@@ -10,8 +10,8 @@ Write-Host "Iniciando la configuración de inicio de sesión automático..."
 
 # Clave 1: DefaultUserName
 # Establece el usuario predeterminado para el inicio de sesión.
-Set-ItemProperty -Path $KeyPath -Name "DefaultUserName" -Value ".\\Alumno_Invitado" -Type String -Force
-Write-Host "-> DefaultUserName configurado a .\\Alumno_Invitado"
+Set-ItemProperty -Path $KeyPath -Name "DefaultUserName" -Value ".\Alumno_Invitado" -Type String -Force
+Write-Host "-> DefaultUserName configurado a .\Alumno_Invitado"
 
 # Clave 2: DefaultPassword
 # Establece la contraseña predeterminada (cadena vacía).
