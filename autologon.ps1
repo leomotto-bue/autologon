@@ -1,41 +1,25 @@
 <#
 .SYNOPSIS
-    Script unificado para configurar O revertir estaciones de trabajo de escuela.
+    Script INTERACTIVO para configurar O revertir estaciones de trabajo de escuela.
     
 .DESCRIPTION
-    Este script acepta un parámetro -Action para 'apply' (aplicar) o 'revert' (revertir)
-    las siguientes configuraciones:
+    Este script se ejecuta, comprueba los permisos de administrador y LUEGO
+    muestra un menú para elegir la acción a realizar:
     
-    1. Configuración de AutoAdminLogon para un usuario invitado.
-    2. Directivas de Google Chrome para forzar perfiles efímeros y deshabilitar sincronización.
+    1. Aplicar configuraciones (Autologon + Chrome).
+    2. Revertir configuraciones.
+    3. Salir.
     
-    Requiere privilegios de Administrador para CUALQUIER acción.
-
-.PARAMETER Action
-    [string] Obligatorio. Especifica la acción a realizar.
-    Valores válidos:
-    - 'apply'  : Aplica todas las configuraciones de la escuela.
-    - 'revert' : Revierte todas las configuraciones a un estado predeterminado.
+    Requiere privilegios de Administrador para CUALQUIER acción de cambio.
 
 .EXAMPLE
-    (irm https://.../script.ps1) | iex -Action apply
-    
-.EXAMPLE
-    (irm https://.../script.ps1) | iex -Action revert
+    (irm https://.../script.ps1) | iex
+    (A continuación, aparecerá un menú pidiendo elegir 1, 2 o 3)
 
 .NOTES
     Autor: Gemini
-    Versión: 2.0
+    Versión: 3.0
 #>
-
-# =================================================================
-# INICIO: DEFINICIÓN DE PARÁMETROS
-# =================================================================
-param(
-    [Parameter(Mandatory=$true, HelpMessage="Indica la acción a realizar: 'apply' (aplicar) o 'revert' (revertir).")]
-    [ValidateSet('apply', 'revert')]
-    [string]$Action
-)
 
 # =================================================================
 # SECCIÓN 1: VERIFICACIÓN DE ADMINISTRADOR
@@ -49,11 +33,11 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
     if ($Host.Name -eq "ConsoleHost") {
         Read-Host "Presione Enter para salir..."
     }
+    # Salir del script si no es admin
     exit 1
 }
 
 Write-Host "Privilegios de Administrador confirmados." -ForegroundColor Green
-Write-Host "Acción seleccionada: $Action" -ForegroundColor Cyan
 Write-Host ""
 
 # =================================================================
@@ -93,7 +77,6 @@ function Apply-SchoolPolicies {
     Write-Host ""
     Write-Host "Aplicando directivas de Google Chrome..."
     try {
-        # Asegurarse de que la ruta de la clave del registro exista
         if (-not (Test-Path $ChromePolicyPath)) {
             Write-Host "-> La ruta de directivas de Chrome no existe. Creándola ahora..."
             New-Item -Path $ChromePolicyParentPath -Name "Chrome" -Force -ErrorAction Stop | Out-Null
@@ -124,11 +107,9 @@ function Revert-SchoolPolicies {
     # --- Revertir Autologon ---
     Write-Host "Revirtiendo configuración de Autologon..."
     try {
-        # Deshabilitar Autologon
         Set-ItemProperty -Path $KeyPathAutoLogon -Name "AutoAdminLogon" -Value "0" -Type String -Force
         Write-Host "-> AutoAdminLogon deshabilitado (0)"
 
-        # Eliminar las credenciales almacenadas (importante por seguridad)
         Remove-ItemProperty -Path $KeyPathAutoLogon -Name "DefaultUserName" -ErrorAction SilentlyContinue
         Write-Host "-> DefaultUserName eliminado."
         
@@ -146,7 +127,6 @@ function Revert-SchoolPolicies {
     Write-Host "Revirtiendo directivas de Google Chrome..."
     try {
         if (Test-Path $ChromePolicyPath) {
-            # Eliminar las directivas específicas que configuramos
             Remove-ItemProperty -Path $ChromePolicyPath -Name "ForceEphemeralProfiles" -ErrorAction SilentlyContinue
             Write-Host "-> Directiva 'ForceEphemeralProfiles' eliminada."
             
@@ -167,30 +147,61 @@ function Revert-SchoolPolicies {
 }
 
 # =================================================================
-# SECCIÓN 3: EJECUCIÓN PRINCIPAL (LÓGICA DE SWITCH)
+# SECCIÓN 3: MENÚ INTERACTIVO (NUEVO)
 # =================================================================
+Write-Host ""
+Write-Host "=================================================================" -ForegroundColor Cyan
+Write-Host " MENÚ DE ACCIONES - CONFIGURACIÓN DE ESTACIONES"
+Write-Host "================================================================="
+Write-Host "Por favor, elija la acción que desea realizar:"
+Write-Host ""
+Write-Host "   [1] Aplicar configuraciones de escuela (Autologon + Chrome)" -ForegroundColor Green
+Write-Host "   [2] Revertir configuraciones de escuela" -ForegroundColor Yellow
+Write-Host "   [3] Salir sin hacer cambios" -ForegroundColor Gray
+Write-Host ""
 
-switch ($Action) {
-    'apply' {
+$choice = Read-Host "Escriba su opción (1, 2, o 3) y presione Enter"
+
+# =================================================================
+# SECCIÓN 4: EJECUCIÓN PRINCIPAL (LÓGICA DE SWITCH)
+# =================================================================
+$actionTaken = $false
+
+switch ($choice) {
+    '1' {
+        Write-Host ""
+        Write-Host "Ha seleccionado: APLICAR." -ForegroundColor Green
         Apply-SchoolPolicies
+        $actionTaken = $true
     }
-    'revert' {
+    '2' {
+        Write-Host ""
+        Write-Host "Ha seleccionado: REVERTIR." -ForegroundColor Yellow
         Revert-SchoolPolicies
+        $actionTaken = $true
     }
-    # Esta sección 'default' técnicamente no es necesaria gracias a ValidateSet,
-    # pero es una buena práctica en caso de que el script se modifique.
+    '3' {
+        Write-Host ""
+        Write-Host "Ha seleccionado: Salir." -ForegroundColor Gray
+        Write-Host "No se han realizado cambios."
+    }
     default {
-        Write-Error "Acción '$Action' no reconocida."
+        Write-Host ""
+        Write-Warning "Opción no válida: '$choice'."
+        Write-Warning "Saliendo del script. No se han realizado cambios."
     }
 }
 
-# =================================================================
+# =D================================================================
 # FIN: MENSAJE DE FINALIZACIÓN
 # =================================================================
 Write-Host ""
 Write-Host "=================================================================" -ForegroundColor Green
-Write-Host "¡Script completado!"
-Write-Host "Acción realizada: $Action"
-Write-Host "Los cambios de registro han sido aplicados."
-Write-Host "Recuerde reiniciar el sistema (para Autologon) o Google Chrome (para directivas) si es necesario."
+Write-Host "Script finalizado."
+if ($actionTaken) {
+    Write-Host "Los cambios de registro han sido procesados."
+    Write-Host "Recuerde reiniciar el sistema (para Autologon) o Google Chrome (para directivas) si es necesario."
+} else {
+    Write-Host "No se aplicaron cambios en el registro."
+}
 Write-Host "================================================================="
