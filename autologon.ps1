@@ -1,24 +1,44 @@
 <#
 .SYNOPSIS
-    Script unificado para configurar estaciones de trabajo de escuela.
-    1. Configura el AutoAdminLogon para un usuario invitado.
-    2. Aplica directivas de Google Chrome para forzar perfiles efímeros
-       y deshabilitar la sincronización de cuentas.
-
-.DESCRIPTION
-    Este script modifica el registro de Windows (HKLM) y requiere
-    privilegios de Administrador para ejecutarse.
+    Script unificado para configurar O revertir estaciones de trabajo de escuela.
     
-    Está diseñado para ser ejecutado mediante 'irm | iex' en un entorno
-    de configuración.
+.DESCRIPTION
+    Este script acepta un parámetro -Action para 'apply' (aplicar) o 'revert' (revertir)
+    las siguientes configuraciones:
+    
+    1. Configuración de AutoAdminLogon para un usuario invitado.
+    2. Directivas de Google Chrome para forzar perfiles efímeros y deshabilitar sincronización.
+    
+    Requiere privilegios de Administrador para CUALQUIER acción.
+
+.PARAMETER Action
+    [string] Obligatorio. Especifica la acción a realizar.
+    Valores válidos:
+    - 'apply'  : Aplica todas las configuraciones de la escuela.
+    - 'revert' : Revierte todas las configuraciones a un estado predeterminado.
+
+.EXAMPLE
+    (irm https://.../script.ps1) | iex -Action apply
+    
+.EXAMPLE
+    (irm https://.../script.ps1) | iex -Action revert
 
 .NOTES
     Autor: Gemini
-    Versión: 1.0
+    Versión: 2.0
 #>
 
 # =================================================================
-# INICIO: VERIFICACIÓN DE ADMINISTRADOR
+# INICIO: DEFINICIÓN DE PARÁMETROS
+# =================================================================
+param(
+    [Parameter(Mandatory=$true, HelpMessage="Indica la acción a realizar: 'apply' (aplicar) o 'revert' (revertir).")]
+    [ValidateSet('apply', 'revert')]
+    [string]$Action
+)
+
+# =================================================================
+# SECCIÓN 1: VERIFICACIÓN DE ADMINISTRADOR
 # =================================================================
 Write-Host "Verificando privilegios de Administrador..." -ForegroundColor Yellow
 
@@ -26,90 +46,143 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
     Write-Error "ACCESO DENEGADO: Este script debe ejecutarse como Administrador."
     Write-Warning "Por favor, reinicie su terminal de PowerShell (o CMD) como 'Administrador' e intente de nuevo."
     
-    # Pausa para que el usuario pueda leer el error si se ejecuta interactivamente
     if ($Host.Name -eq "ConsoleHost") {
         Read-Host "Presione Enter para salir..."
     }
-    # Termina el script si no es admin
     exit 1
 }
 
 Write-Host "Privilegios de Administrador confirmados." -ForegroundColor Green
-
-
-# =================================================================
-# SECCIÓN 1: CONFIGURACIÓN DE AUTOLOGON
-# =================================================================
+Write-Host "Acción seleccionada: $Action" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "=================================================================" -ForegroundColor Cyan
-Write-Host " Iniciando la configuración de inicio de sesión automático..."
-Write-Host "=================================================================" -ForegroundColor Cyan
 
+# =================================================================
+# SECCIÓN 2: DEFINICIÓN DE VARIABLES Y FUNCIONES
+# =================================================================
+
+# --- Variables Globales de Rutas ---
 $KeyPathAutoLogon = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
-
-try {
-    # Clave 1: DefaultUserName
-    Set-ItemProperty -Path $KeyPathAutoLogon -Name "DefaultUserName" -Value ".\Alumno_Invitado" -Type String -Force
-    Write-Host "-> DefaultUserName configurado a '.\Alumno_Invitado'"
-
-    # Clave 2: DefaultPassword
-    # ¡Advertencia de seguridad! Esto expone una contraseña vacía en el registro.
-    Set-ItemProperty -Path $KeyPathAutoLogon -Name "DefaultPassword" -Value "" -Type String -Force
-    Write-Host "-> DefaultPassword configurado a cadena vacía"
-
-    # Clave 3: AutoAdminLogon
-    Set-ItemProperty -Path $KeyPathAutoLogon -Name "AutoAdminLogon" -Value "1" -Type String -Force
-    Write-Host "-> AutoAdminLogon habilitado (1)"
-
-    Write-Host "Configuración de Autologon completada." -ForegroundColor Green
-}
-catch {
-    Write-Error "Falló la configuración de Autologon: $_"
-}
-
-
-# =================================================================
-# SECCIÓN 2: DIRECTIVAS DE GOOGLE CHROME (SIN .REG)
-# =================================================================
-Write-Host ""
-Write-Host "=================================================================" -ForegroundColor Cyan
-Write-Host " Iniciando la configuración de directivas de Google Chrome..."
-Write-Host "=================================================================" -ForegroundColor Cyan
-
 $ChromePolicyPath = "HKLM:\SOFTWARE\Policies\Google\Chrome"
+$ChromePolicyParentPath = "HKLM:\SOFTWARE\Policies\Google"
 
-try {
-    # Paso 1: Asegurarse de que la ruta de la clave del registro exista
-    if (-not (Test-Path $ChromePolicyPath)) {
-        Write-Host "La ruta de directivas de Chrome no existe. Creándola ahora..."
-        New-Item -Path "HKLM:\SOFTWARE\Policies\Google" -Name "Chrome" -Force | Out-Null
-    } else {
-        Write-Host "La ruta de directivas de Chrome ya existe."
+# --- FUNCIÓN: APLICAR CONFIGURACIONES ---
+function Apply-SchoolPolicies {
+    Write-Host "=================================================================" -ForegroundColor Cyan
+    Write-Host " Iniciando APLICACIÓN de configuraciones de escuela..."
+    Write-Host "=================================================================" -ForegroundColor Cyan
+
+    # --- Aplicar Autologon ---
+    Write-Host "Aplicando configuración de Autologon..."
+    try {
+        Set-ItemProperty -Path $KeyPathAutoLogon -Name "DefaultUserName" -Value ".\Alumno_Invitado" -Type String -Force
+        Write-Host "-> DefaultUserName configurado a '.\Alumno_Invitado'"
+
+        Set-ItemProperty -Path $KeyPathAutoLogon -Name "DefaultPassword" -Value "" -Type String -Force
+        Write-Host "-> DefaultPassword configurado a cadena vacía (¡Advertencia de seguridad!)"
+
+        Set-ItemProperty -Path $KeyPathAutoLogon -Name "AutoAdminLogon" -Value "1" -Type String -Force
+        Write-Host "-> AutoAdminLogon habilitado (1)"
+        
+        Write-Host "Configuración de Autologon APLICADA." -ForegroundColor Green
+    }
+    catch {
+        Write-Error "Falló la configuración de Autologon: $_"
     }
 
-    # Paso 2: Aplicar las directivas de Chrome
-    
-    # Directiva 1: ForceEphemeralProfiles (DWORD = 1)
-    # Fuerza a que los perfiles sean temporales. Se borran al cerrar Chrome.
-    Set-ItemProperty -Path $ChromePolicyPath -Name "ForceEphemeralProfiles" -Value 1 -Type DWord -Force
-    Write-Host "-> ForceEphemeralProfiles configurado a 1 (Perfiles temporales habilitados)"
+    # --- Aplicar Directivas de Chrome ---
+    Write-Host ""
+    Write-Host "Aplicando directivas de Google Chrome..."
+    try {
+        # Asegurarse de que la ruta de la clave del registro exista
+        if (-not (Test-Path $ChromePolicyPath)) {
+            Write-Host "-> La ruta de directivas de Chrome no existe. Creándola ahora..."
+            New-Item -Path $ChromePolicyParentPath -Name "Chrome" -Force -ErrorAction Stop | Out-Null
+        }
+        
+        Set-ItemProperty -Path $ChromePolicyPath -Name "ForceEphemeralProfiles" -Value 1 -Type DWord -Force -ErrorAction Stop
+        Write-Host "-> ForceEphemeralProfiles configurado a 1 (Perfiles temporales)"
 
-    # Directiva 2: SyncDisabled (DWORD = 1)
-    # Deshabilita completamente la función de sincronización de Chrome.
-    Set-ItemProperty -Path $ChromePolicyPath -Name "SyncDisabled" -Value 1 -Type DWord -Force
-    Write-Host "-> SyncDisabled configurado a 1 (Sincronización deshabilitada)"
+        Set-ItemProperty -Path $ChromePolicyPath -Name "SyncDisabled" -Value 1 -Type DWord -Force -ErrorAction Stop
+        Write-Host "-> SyncDisabled configurado a 1 (Sincronización deshabilitada)"
 
-    # Directiva 3: BrowserSignin (DWORD = 0)
-    # Evita que los usuarios inicien sesión en el navegador (política complementaria).
-    Set-ItemProperty -Path $ChromePolicyPath -Name "BrowserSignin" -Value 0 -Type DWord -Force
-    Write-Host "-> BrowserSignin configurado a 0 (Inicio de sesión en navegador deshabilitado)"
+        Set-ItemProperty -Path $ChromePolicyPath -Name "BrowserSignin" -Value 0 -Type DWord -Force -ErrorAction Stop
+        Write-Host "-> BrowserSignin configurado a 0 (Inicio de sesión en navegador deshabilitado)"
 
-    Write-Host "Configuración de directivas de Chrome completada." -ForegroundColor Green
+        Write-Host "Directivas de Chrome APLICADAS." -ForegroundColor Green
+    }
+    catch {
+        Write-Error "Falló la configuración de directivas de Chrome: $_"
+    }
 }
-catch {
-    Write-Error "Falló la configuración de directivas de Chrome: $_"
+
+# --- FUNCIÓN: REVERTIR CONFIGURACIONES ---
+function Revert-SchoolPolicies {
+    Write-Host "=================================================================" -ForegroundColor Yellow
+    Write-Host " Iniciando REVERSIÓN de configuraciones de escuela..."
+    Write-Host "=================================================================" -ForegroundColor Yellow
+
+    # --- Revertir Autologon ---
+    Write-Host "Revirtiendo configuración de Autologon..."
+    try {
+        # Deshabilitar Autologon
+        Set-ItemProperty -Path $KeyPathAutoLogon -Name "AutoAdminLogon" -Value "0" -Type String -Force
+        Write-Host "-> AutoAdminLogon deshabilitado (0)"
+
+        # Eliminar las credenciales almacenadas (importante por seguridad)
+        Remove-ItemProperty -Path $KeyPathAutoLogon -Name "DefaultUserName" -ErrorAction SilentlyContinue
+        Write-Host "-> DefaultUserName eliminado."
+        
+        Remove-ItemProperty -Path $KeyPathAutoLogon -Name "DefaultPassword" -ErrorAction SilentlyContinue
+        Write-Host "-> DefaultPassword eliminado."
+
+        Write-Host "Configuración de Autologon REVERTIDA." -ForegroundColor Green
+    }
+    catch {
+        Write-Error "Falló la reversión de Autologon: $_"
+    }
+
+    # --- Revertir Directivas de Chrome ---
+    Write-Host ""
+    Write-Host "Revirtiendo directivas de Google Chrome..."
+    try {
+        if (Test-Path $ChromePolicyPath) {
+            # Eliminar las directivas específicas que configuramos
+            Remove-ItemProperty -Path $ChromePolicyPath -Name "ForceEphemeralProfiles" -ErrorAction SilentlyContinue
+            Write-Host "-> Directiva 'ForceEphemeralProfiles' eliminada."
+            
+            Remove-ItemProperty -Path $ChromePolicyPath -Name "SyncDisabled" -ErrorAction SilentlyContinue
+            Write-Host "-> Directiva 'SyncDisabled' eliminada."
+            
+            Remove-ItemProperty -Path $ChromePolicyPath -Name "BrowserSignin" -ErrorAction SilentlyContinue
+            Write-Host "-> Directiva 'BrowserSignin' eliminada."
+            
+            Write-Host "Directivas de Chrome REVERTIDAS." -ForegroundColor Green
+        } else {
+            Write-Host "-> La ruta de directivas de Chrome no existe, no hay nada que revertir."
+        }
+    }
+    catch {
+        Write-Error "Falló la reversión de directivas de Chrome: $_"
+    }
 }
 
+# =================================================================
+# SECCIÓN 3: EJECUCIÓN PRINCIPAL (LÓGICA DE SWITCH)
+# =================================================================
+
+switch ($Action) {
+    'apply' {
+        Apply-SchoolPolicies
+    }
+    'revert' {
+        Revert-SchoolPolicies
+    }
+    # Esta sección 'default' técnicamente no es necesaria gracias a ValidateSet,
+    # pero es una buena práctica en caso de que el script se modifique.
+    default {
+        Write-Error "Acción '$Action' no reconocida."
+    }
+}
 
 # =================================================================
 # FIN: MENSAJE DE FINALIZACIÓN
@@ -117,7 +190,7 @@ catch {
 Write-Host ""
 Write-Host "=================================================================" -ForegroundColor Green
 Write-Host "¡Script completado!"
-Write-Host "Los cambios de Autologon y Google Chrome han sido aplicados."
-Write-Host "Autologon: Requiere un reinicio del sistema."
-Write-Host "Chrome: Requiere un reinicio de Google Chrome (si estaba abierto)."
+Write-Host "Acción realizada: $Action"
+Write-Host "Los cambios de registro han sido aplicados."
+Write-Host "Recuerde reiniciar el sistema (para Autologon) o Google Chrome (para directivas) si es necesario."
 Write-Host "================================================================="
