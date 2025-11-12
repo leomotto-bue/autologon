@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Script INTERACTIVO MODULAR para configurar O revertir estaciones de trabajo. (V12.1)
+    Script INTERACTIVO MODULAR para configurar O revertir estaciones de trabajo. (V12)
     
 .DESCRIPTION
     Permite seleccionar individualmente entre aplicar o revertir:
@@ -15,7 +15,11 @@
 
 .NOTES
     Autor: Gemini
-    Versión: 12.0
+    Versión: 12.2
+    - (V12.2) Se actualiza el título del menú principal para mostrar la versión V12.2.
+    - (V12.2) Se corrige un error de tipeo en el menú (opción '[7s]' -> '[7]').
+    - (V12.1) CORRECCIÓN VBSCRIPT: Se corrige el error 'Se esperaba un final de instrucción' (800A0401)
+      escapando correctamente (duplicando) las comillas internas en el comando WshShell.Run.
     - (V12) CORRECCIÓN DE VISIBILIDAD: Resuelve el 'flash' de la ventana de PowerShell.
     - La Tarea de Aviso (_WARN) ya no llama a 'powershell.exe'.
     - Ahora crea un lanzador VBScript ('_SchoolShutdown_LAUNCHER.vbs') que se encarga
@@ -206,7 +210,7 @@ function Repair-MessagingServices {
 }
 
 
-# Función principal de aplicación (ACTUALIZADA V12)
+# Función principal de aplicación (ACTUALIZADA V12.1)
 function Apply-ShutdownTasks {
     Write-Host ">> Configurando Tareas de Apagado Programado (V12 - Lanzador Invisible)..." -ForegroundColor Cyan
     
@@ -246,11 +250,19 @@ $wshell.Popup("AVISO FINAL (1 MIN): APAGADO INMINENTE. Cierre todo ahora.", 10, 
         return
     }
 
-    # 5. (NUEVO V12) Definir y guardar el LANZADOR VBScript (.vbs)
+    # 5. (ACTUALIZADO V12.1) Definir y guardar el LANZADOR VBScript (.vbs)
     # Este script .vbs será ejecutado por wscript.exe y lanzará el .ps1 de forma invisible.
+    
+    # Primero, construir el comando de PowerShell que queremos ejecutar
     $PowerShellCmdToRun = "powershell.exe -ExecutionPolicy Bypass -File ""$WarningScriptFile"""
+    
+    # (V12.1) CORRECCIÓN: Escapar las comillas para VBScript.
+    # VBScript necesita que "comando" se convierta en ""comando"".
+    # El comando final será: WshShell.Run "powershell.exe ... -File ""C:\...ps1"" ", 0, False
+    $VBS_Command_Escaped = $PowerShellCmdToRun.Replace('"', '""')
+    
     $VBSLauncherString = 'Set WshShell = CreateObject("WScript.Shell")' + [Environment]::NewLine +
-                         'WshShell.Run "{0}", 0, False' -f $PowerShellCmdToRun + [Environment]::NewLine +
+                         'WshShell.Run "{0}", 0, False' -f $VBS_Command_Escaped + [Environment]::NewLine +
                          'Set WshShell = Nothing'
     
     try {
@@ -333,7 +345,7 @@ $wshell.Popup("AVISO FINAL (1 MIN): APAGADO INMINENTE. Cierre todo ahora.", 10, 
 # =================================================================
 Clear-Host
 Write-Host "=================================================================" -ForegroundColor Cyan
-Write-Host "      GESTIÓN DE ESTACIONES DE TRABAJO - ESCUELA (V12)"
+Write-Host "      GESTIÓN DE ESTACIONES DE TRABAJO - ESCUELA (Versión 12.2)"
 Write-Host "=================================================================" -ForegroundColor Cyan
 Write-Host "Seleccione una opción:"
 Write-Host ""
@@ -346,7 +358,7 @@ Write-Host "   -----------------------------------------------------"
 Write-Host "   [5] Solo Aplicar Chrome (Perfiles Efímeros)"
 Write-Host "   [6] Solo Revertir Chrome"
 Write-Host "   -----------------------------------------------------"
-Write-Host "   [7s] Aplicar/Actualizar Tareas de Apagado (V12-Invisible)" -ForegroundColor Magenta
+Write-Host "   [7] Aplicar/Actualizar Tareas de Apagado (V12.2-Invisible)" -ForegroundColor Magenta
 Write-Host "   [8] Revertir TODAS las Tareas de Apagado" -ForegroundColor Magenta
 Write-Host "   -----------------------------------------------------"
 Write-Host "   [Q] Salir"
@@ -393,6 +405,6 @@ Write-Host "Proceso finalizado."
 Write-Host "Si aplicó cambios, recuerde:"
 Write-Host " - Autologon: Requiere reiniciar Windows."
 Write-Host " - Chrome: Requiere reiniciar el navegador."
-Write-Host " - Tareas Apagado (V12): Se han creado tareas de AVISO (invisibles)"
+Write-Host " - Tareas Apagado (V12.2): Se han creado tareas de AVISO (invisibles)"
 Write-Host "   y tareas de APAGADO (como 'SYSTEM')."
 Write-Host "================================================================="
