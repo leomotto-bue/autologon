@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Script INTERACTIVO MODULAR para configurar O revertir estaciones de trabajo. (V11)
+    Script INTERACTIVO MODULAR para configurar O revertir estaciones de trabajo. (V12)
     
 .DESCRIPTION
     Permite seleccionar individualmente entre aplicar o revertir:
@@ -15,11 +15,13 @@
 
 .NOTES
     Autor: Gemini
-    Versión: 11.0
-    - (V11) CORRECCIÓN CRÍTICA: Se eliminó el parámetro '-ErrorAction' de 'schtasks.exe' (no es un cmdlet).
-    - (V11) CORRECCIÓN CRÍTICA: Se eliminó el parámetro '/P ""' de la creación de la tarea de AVISO.
-      'schtasks.exe' no acepta '/P' si la contraseña está en blanco; se debe omitir.
-    - Se redirigió la salida de error (2>$null) en 'schtasks' para suprimir mensajes de "tarea no encontrada".
+    Versión: 12.0
+    - (V12) CORRECCIÓN DE VISIBILIDAD: Resuelve el 'flash' de la ventana de PowerShell.
+    - La Tarea de Aviso (_WARN) ya no llama a 'powershell.exe'.
+    - Ahora crea un lanzador VBScript ('_SchoolShutdown_LAUNCHER.vbs') que se encarga
+      de ejecutar el script .ps1 de forma 100% invisible usando 'wscript.exe'.
+    - 'Revert-ShutdownTasks' ahora elimina el .ps1 y el .vbs.
+    - (V11) Correcciones de 'schtasks.exe' (sin '/P ""' y sin '-ErrorAction').
     - (V10) Lógica de dos tareas (WARN + SHUTDOWN) para 'Session 0 Isolation'.
 #>
 
@@ -54,15 +56,15 @@ $TaskTarde_SHUTDOWN = "SchoolShutdown_Tarde_SHUTDOWN"
 $TaskVespertino_WARN = "SchoolShutdown_Vespertino_WARN"
 $TaskVespertino_SHUTDOWN = "SchoolShutdown_Vespertino_SHUTDOWN"
 
-# (V10) Ubicación del script de AVISO
+# (V12) Nuevas rutas de archivos
 $WarningScriptFile = "C:\Windows\Temp\_SchoolShutdown_WARNING.ps1"
-# (V11) Corregido a un nombre de usuario más simple, sin '.\'
+$WarningLauncherFile = "C:\Windows\Temp\_SchoolShutdown_LAUNCHER.vbs" # (NUEVO V12)
 $UsuarioDeLogon = "Alumno_Invitado" 
 
 
 # --- FUNCIONES DE AUTOLOGON ---
 function Apply-AutoLogon {
-    # ... (Sin cambios respecto a V10, pero usando la variable $UsuarioDeLogon actualizada)
+    # ... (Sin cambios)
     Write-Host ">> Aplicando configuración de Autologon..." -ForegroundColor Cyan
     try {
         Set-ItemProperty -Path $KeyPathAutoLogon -Name "DefaultUserName" -Value $UsuarioDeLogon -Type String -Force
@@ -120,13 +122,13 @@ function Revert-Chrome {
     } catch { Write-Error "   [ERROR] Falló reversión Chrome: $_" }
 }
 
-# --- (ACTUALIZADO V11) FUNCIONES DE APAGADO PROGRAMADO ---
+# --- (ACTUALIZADO V12) FUNCIONES DE APAGADO PROGRAMADO ---
 
-# Función de limpieza (ACTUALIZADA V11)
+# Función de limpieza (ACTUALIZADA V12)
 function Revert-ShutdownTasks {
     Write-Host ">> Eliminando Tareas de Apagado Programado existentes..." -ForegroundColor Yellow
     try {
-        # 1. Eliminar Tareas (Sin -ErrorAction, con 2>$null)
+        # 1. Eliminar Tareas
         Write-Host "   -> Limpiando tareas..."
         schtasks /Delete /TN $TaskMañana_WARN /F 2>$null
         schtasks /Delete /TN $TaskMañana_SHUTDOWN /F 2>$null
@@ -136,15 +138,18 @@ function Revert-ShutdownTasks {
         schtasks /Delete /TN $TaskVespertino_SHUTDOWN /F 2>$null
         Write-Host "   [OK] Tareas de apagado anteriores eliminadas."
 
-        # 2. Eliminar el script de AVISO
+        # 2. Eliminar los scripts (ACTUALIZADO V12)
         if (Test-Path $WarningScriptFile) {
             Remove-Item -Path $WarningScriptFile -Force -ErrorAction SilentlyContinue
             Write-Host "   [OK] Script de aviso ($WarningScriptFile) eliminado."
         }
+        if (Test-Path $WarningLauncherFile) {
+            Remove-Item -Path $WarningLauncherFile -Force -ErrorAction SilentlyContinue
+            Write-Host "   [OK] Script lanzador ($WarningLauncherFile) eliminado."
+        }
 
     } catch {
-        # Este catch ahora solo se aplica a la eliminación del archivo
-        Write-Error "   [ERROR] Falló la eliminación de tareas: $_"
+        Write-Error "   [ERROR] Falló la eliminación de tareas/scripts: $_"
     }
 }
 
@@ -174,7 +179,7 @@ function Get-ValidatedTime($ShiftName, $StartTime, $EndTime) {
     return $ValidTime
 }
 
-# (V10) Función auxiliar para reparar dependencias
+# (V10) Función auxiliar para reparar dependencias (Sin cambios)
 function Repair-MessagingServices {
     Write-Host "   -> Verificando servicios de mensajería (TermService, AllowRemoteRPC)..."
     try {
@@ -201,9 +206,9 @@ function Repair-MessagingServices {
 }
 
 
-# Función principal de aplicación (ACTUALIZADA V11.1)
+# Función principal de aplicación (ACTUALIZADA V12)
 function Apply-ShutdownTasks {
-    Write-Host ">> Configurando Tareas de Apagado Programado (V11 - Dos Tareas)..." -ForegroundColor Cyan
+    Write-Host ">> Configurando Tareas de Apagado Programado (V12 - Lanzador Invisible)..." -ForegroundColor Cyan
     
     # 1. Limpiar tareas anteriores
     Revert-ShutdownTasks
@@ -212,9 +217,7 @@ function Apply-ShutdownTasks {
     # 2. Reparar servicios
     Repair-MessagingServices
 
-    # 3. Definir el script de AVISO (CORREGIDO V11.1)
-    # (V11.1) Cambiado a un "here-string" literal (@'...'@) para evitar expansión de variables.
-    # (V11.1) Se eliminaron los '\' (backslashes) de escape erróneos.
+    # 3. Definir el script de AVISO (.ps1)
     $PayloadScriptString = @'
 # --- Script de Aviso Progresivo (Ejecutado como Alumno_Invitado) ---
 Add-Type -AssemblyName Microsoft.VisualBasic
@@ -243,15 +246,31 @@ $wshell.Popup("AVISO FINAL (1 MIN): APAGADO INMINENTE. Cierre todo ahora.", 10, 
         return
     }
 
-    # 5. Definir los comandos de las tareas
-    $TaskRunCommand_WARN = "powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File ""$WarningScriptFile"""
+    # 5. (NUEVO V12) Definir y guardar el LANZADOR VBScript (.vbs)
+    # Este script .vbs será ejecutado por wscript.exe y lanzará el .ps1 de forma invisible.
+    $PowerShellCmdToRun = "powershell.exe -ExecutionPolicy Bypass -File ""$WarningScriptFile"""
+    $VBSLauncherString = 'Set WshShell = CreateObject("WScript.Shell")' + [Environment]::NewLine +
+                         'WshShell.Run "{0}", 0, False' -f $PowerShellCmdToRun + [Environment]::NewLine +
+                         'Set WshShell = Nothing'
+    
+    try {
+        $VBSLauncherString | Out-File -FilePath $WarningLauncherFile -Encoding ascii -Force
+        Write-Host "   -> Script lanzador guardado en: $WarningLauncherFile"
+    } catch {
+        Write-Error "   [ERROR] No se pudo escribir el lanzador VBS en $WarningLauncherFile. $_"
+        Write-Error "   Saliendo de la configuración de tareas."
+        return
+    }
+
+    # 6. (ACTUALIZADO V12) Definir los comandos de las tareas
+    $TaskRunCommand_WARN = "wscript.exe ""$WarningLauncherFile"""
     $TaskRunCommand_SHUTDOWN = "shutdown.exe /s /f /t 0"
 
-    Write-Host "   -> Tarea de Aviso (Usuario): $TaskRunCommand_WARN"
+    Write-Host "   -> Tarea de Aviso (Usuario): $TaskRunCommand_WARN" -ForegroundColor Green
     Write-Host "   -> Tarea de Apagado (SYSTEM): $TaskRunCommand_SHUTDOWN"
     Write-Host ""
     
-    # 6. Definir límites de los turnos
+    # 7. Definir límites de los turnos
     $Shifts = @{
         Mañana = @{ W=$TaskMañana_WARN; S=$TaskMañana_SHUTDOWN; Start="07:35"; End="12:15" }
         Tarde = @{ W=$TaskTarde_WARN; S=$TaskTarde_SHUTDOWN; Start="12:25"; End="17:05" }
@@ -260,7 +279,6 @@ $wshell.Popup("AVISO FINAL (1 MIN): APAGADO INMINENTE. Cierre todo ahora.", 10, 
 
     Write-Host "Seleccione los turnos para configurar el apagado automático:"
     
-    # (V11) Se envuelve la creación de tareas en un Try/Catch
     try {
         # --- Configuración Turno Mañana ---
         if ((Read-Host "   ¿Configurar Turno Mañana (07:35-12:15)? (s/n)") -eq 's') {
@@ -269,7 +287,6 @@ $wshell.Popup("AVISO FINAL (1 MIN): APAGADO INMINENTE. Cierre todo ahora.", 10, 
             $WarnTime = $ShutdownTime.Add([TimeSpan]::FromMinutes(-10)).ToString("hh\:mm")
             
             Write-Host "     -> Creando Tarea AVISO '$($Shift.W)' (Usuario: $UsuarioDeLogon) a las $WarnTime"
-            # (V11) CORRECCIÓN: Se eliminó el parámetro '/P ""'.
             schtasks /Create /TN $Shift.W /TR $TaskRunCommand_WARN /SC DAILY /ST $WarnTime /RU $UsuarioDeLogon /F /RL LIMITED 2>$null
             
             Write-Host "     -> Creando Tarea APAGADO '$($Shift.S)' (SYSTEM) a las $($ShutdownTime.ToString("hh\:mm"))"
@@ -283,7 +300,6 @@ $wshell.Popup("AVISO FINAL (1 MIN): APAGADO INMINENTE. Cierre todo ahora.", 10, 
             $WarnTime = $ShutdownTime.Add([TimeSpan]::FromMinutes(-10)).ToString("hh\:mm")
             
             Write-Host "     -> Creando Tarea AVISO '$($Shift.W)' (Usuario: $UsuarioDeLogon) a las $WarnTime"
-            # (V11) CORRECCIÓN: Se eliminó el parámetro '/P ""'.
             schtasks /Create /TN $Shift.W /TR $TaskRunCommand_WARN /SC DAILY /ST $WarnTime /RU $UsuarioDeLogon /F /RL LIMITED 2>$null
             
             Write-Host "     -> Creando Tarea APAGADO '$($Shift.S)' (SYSTEM) a las $($ShutdownTime.ToString("hh\:mm"))"
@@ -297,7 +313,6 @@ $wshell.Popup("AVISO FINAL (1 MIN): APAGADO INMINENTE. Cierre todo ahora.", 10, 
             $WarnTime = $ShutdownTime.Add([TimeSpan]::FromMinutes(-10)).ToString("hh\:mm")
 
             Write-Host "     -> Creando Tarea AVISO '$($Shift.W)' (Usuario: $UsuarioDeLogon) a las $WarnTime"
-            # (V11) CORRECCIÓN: Se eliminó el parámetro '/P ""'.
             schtasks /Create /TN $Shift.W /TR $TaskRunCommand_WARN /SC DAILY /ST $WarnTime /RU $UsuarioDeLogon /F /RL LIMITED 2>$null
             
             Write-Host "     -> Creando Tarea APAGADO '$($Shift.S)' (SYSTEM) a las $($ShutdownTime.ToString("hh\:mm"))"
@@ -305,10 +320,10 @@ $wshell.Popup("AVISO FINAL (1 MIN): APAGADO INMINENTE. Cierre todo ahora.", 10, 
         }
         
         Write-Host ""
-        Write-Host "   [OK] Tareas de apagado V11 (Aviso + Apagado) configuradas." -ForegroundColor Green
+        Write-Host "   [OK] Tareas de apagado V12 (Lanzador Invisible) configuradas." -ForegroundColor Green
     
     } catch {
-        Write-Error "   [ERROR] Falló la creación de tareas programadas V11: $_"
+        Write-Error "   [ERROR] Falló la creación de tareas programadas V12: $_"
         Write-Warning "   Asegúrese de que el usuario '$UsuarioDeLogon' existe y que su contraseña está en blanco."
     }
 }
@@ -318,7 +333,7 @@ $wshell.Popup("AVISO FINAL (1 MIN): APAGADO INMINENTE. Cierre todo ahora.", 10, 
 # =================================================================
 Clear-Host
 Write-Host "=================================================================" -ForegroundColor Cyan
-Write-Host "      GESTIÓN DE ESTACIONES DE TRABAJO - ESCUELA (V11)"
+Write-Host "      GESTIÓN DE ESTACIONES DE TRABAJO - ESCUELA (V12)"
 Write-Host "=================================================================" -ForegroundColor Cyan
 Write-Host "Seleccione una opción:"
 Write-Host ""
@@ -331,7 +346,7 @@ Write-Host "   -----------------------------------------------------"
 Write-Host "   [5] Solo Aplicar Chrome (Perfiles Efímeros)"
 Write-Host "   [6] Solo Revertir Chrome"
 Write-Host "   -----------------------------------------------------"
-Write-Host "   [7] Aplicar/Actualizar Tareas de Apagado (V11)" -ForegroundColor Magenta
+Write-Host "   [7s] Aplicar/Actualizar Tareas de Apagado (V12-Invisible)" -ForegroundColor Magenta
 Write-Host "   [8] Revertir TODAS las Tareas de Apagado" -ForegroundColor Magenta
 Write-Host "   -----------------------------------------------------"
 Write-Host "   [Q] Salir"
@@ -362,8 +377,8 @@ switch ($choice) {
     '4' { Revert-AutoLogon }
     '5' { Apply-Chrome }
     '6' { Revert-Chrome }
-    '7' { Apply-ShutdownTasks }   # Llama a la función V11
-    '8' { Revert-ShutdownTasks }  # Llama a la función de borrado V11
+    '7' { Apply-ShutdownTasks }   # Llama a la función V12
+    '8' { Revert-ShutdownTasks }  # Llama a la función de borrado V12
     'Q' { Write-Host "Saliendo sin cambios." -ForegroundColor Gray; exit }
     'q' { Write-Host "Saliendo sin cambios." -ForegroundColor Gray; exit }
     default { Write-Warning "Opción no válida. No se realizaron cambios." }
@@ -378,6 +393,6 @@ Write-Host "Proceso finalizado."
 Write-Host "Si aplicó cambios, recuerde:"
 Write-Host " - Autologon: Requiere reiniciar Windows."
 Write-Host " - Chrome: Requiere reiniciar el navegador."
-Write-Host " - Tareas Apagado (V11): Se han creado tareas de AVISO (como '$UsuarioDeLogon')"
+Write-Host " - Tareas Apagado (V12): Se han creado tareas de AVISO (invisibles)"
 Write-Host "   y tareas de APAGADO (como 'SYSTEM')."
 Write-Host "================================================================="
