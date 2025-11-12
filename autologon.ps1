@@ -201,7 +201,7 @@ function Repair-MessagingServices {
 }
 
 
-# Función principal de aplicación (ACTUALIZADA V11)
+# Función principal de aplicación (ACTUALIZADA V11.1)
 function Apply-ShutdownTasks {
     Write-Host ">> Configurando Tareas de Apagado Programado (V11 - Dos Tareas)..." -ForegroundColor Cyan
     
@@ -212,24 +212,26 @@ function Apply-ShutdownTasks {
     # 2. Reparar servicios
     Repair-MessagingServices
 
-    # 3. Definir el script de AVISO
-    $PayloadScriptString = @"
+    # 3. Definir el script de AVISO (CORREGIDO V11.1)
+    # (V11.1) Cambiado a un "here-string" literal (@'...'@) para evitar expansión de variables.
+    # (V11.1) Se eliminaron los '\' (backslashes) de escape erróneos.
+    $PayloadScriptString = @'
 # --- Script de Aviso Progresivo (Ejecutado como Alumno_Invitado) ---
 Add-Type -AssemblyName Microsoft.VisualBasic
 
-\$wshell = New-Object -ComObject WScript.Shell
+$wshell = New-Object -ComObject WScript.Shell
 
 # T-10: Primer Aviso (10 segundos de visibilidad, icono de Advertencia)
-\$wshell.Popup("AVISO (10 MIN): La notebook debe ser devuelta. Guarde su trabajo. Se apagará en 10 minutos.", 10, "Aviso de Apagado (1/3)", 0x30)
+$wshell.Popup("AVISO (10 MIN): La notebook debe ser devuelta. Guarde su trabajo. Se apagará en 10 minutos.", 10, "Aviso de Apagado (1/3)", 0x30)
 Start-Sleep -Seconds 300 # Esperar 5 min
 
 # T-5: Segundo Aviso
-\$wshell.Popup("AVISO (5 MIN): Guarde su trabajo. El equipo se apagará en 5 minutos.", 10, "Aviso de Apagado (2/3)", 0x30)
+$wshell.Popup("AVISO (5 MIN): Guarde su trabajo. El equipo se apagará en 5 minutos.", 10, "Aviso de Apagado (2/3)", 0x30)
 Start-Sleep -Seconds 240 # Esperar 4 min
 
 # T-1: Aviso Final
-\$wshell.Popup("AVISO FINAL (1 MIN): APAGADO INMINENTE. Cierre todo ahora.", 10, "Aviso de Apagado (3/3)", 0x10) # 0x10 Icono de Error (Stop)
-"@
+$wshell.Popup("AVISO FINAL (1 MIN): APAGADO INMINENTE. Cierre todo ahora.", 10, "Aviso de Apagado (3/3)", 0x10) # 0x10 Icono de Error (Stop)
+'@
 
     # 4. Guardar el script de AVISO en un archivo
     try {
