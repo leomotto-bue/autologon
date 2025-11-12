@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Script INTERACTIVO MODULAR para configurar O revertir estaciones de trabajo. (V7)
+    Script INTERACTIVO MODULAR para configurar O revertir estaciones de trabajo. (V8)
     
 .DESCRIPTION
     Permite seleccionar individualmente entre aplicar o revertir:
@@ -15,7 +15,11 @@
 
 .NOTES
     Autor: Gemini
-    Versión: 7.0
+    Versión: 8.0
+    - (V8) Corrige el error de 261 caracteres de schtasks.exe.
+    - La Tarea Programada ahora guarda un script en C:\Windows\Temp
+      en lugar de usar un comando Base64 incrustado.
+    - Corregido un error de tipeo en el menú ([44] -> [4]).
 #>
 
 # =================================================================
@@ -46,9 +50,13 @@ $TaskMañana = "SchoolShutdown_Mañana"
 $TaskTarde = "SchoolShutdown_Tarde"
 $TaskVespertino = "SchoolShutdown_Vespertino"
 
+# --- (NUEVO V8) Ubicación del script de apagado ---
+$ShutdownScriptFile = "C:\Windows\Temp\_SchoolShutdownTask.ps1"
+
 
 # --- FUNCIONES DE AUTOLOGON ---
 function Apply-AutoLogon {
+    # ... (Sin cambios respecto a V7)
     Write-Host ">> Aplicando configuración de Autologon..." -ForegroundColor Cyan
     try {
         Set-ItemProperty -Path $KeyPathAutoLogon -Name "DefaultUserName" -Value ".\Alumno_Invitado" -Type String -Force
@@ -62,6 +70,7 @@ function Apply-AutoLogon {
 }
 
 function Revert-AutoLogon {
+    # ... (Sin cambios respecto a V7)
     Write-Host ">> Revirtiendo configuración de Autologon..." -ForegroundColor Yellow
     try {
         Set-ItemProperty -Path $KeyPathAutoLogon -Name "AutoAdminLogon" -Value "0" -Type String -Force
@@ -75,6 +84,7 @@ function Revert-AutoLogon {
 
 # --- FUNCIONES DE CHROME ---
 function Apply-Chrome {
+    # ... (Sin cambios respecto a V7)
     Write-Host ">> Aplicando directivas de Google Chrome..." -ForegroundColor Cyan
     try {
         if (-not (Test-Path $ChromePolicyPath)) {
@@ -91,6 +101,7 @@ function Apply-Chrome {
 }
 
 function Revert-Chrome {
+    # ... (Sin cambios respecto a V7)
     Write-Host ">> Revirtiendo directivas de Google Chrome..." -ForegroundColor Yellow
     try {
         if (Test-Path $ChromePolicyPath) {
@@ -103,22 +114,30 @@ function Revert-Chrome {
     } catch { Write-Error "   [ERROR] Falló reversión Chrome: $_" }
 }
 
-# --- (ACTUALIZADO V7) FUNCIONES DE APAGADO PROGRAMADO ---
+# --- (ACTUALIZADO V8) FUNCIONES DE APAGADO PROGRAMADO ---
 
-# Función de limpieza (no cambia)
+# Función de limpieza (ACTUALIZADA V8)
 function Revert-ShutdownTasks {
     Write-Host ">> Eliminando Tareas de Apagado Programado existentes..." -ForegroundColor Yellow
     try {
+        # 1. Eliminar Tareas
         schtasks /Delete /TN $TaskMañana /F -ErrorAction SilentlyContinue | Out-Null
         schtasks /Delete /TN $TaskTarde /F -ErrorAction SilentlyContinue | Out-Null
         schtasks /Delete /TN $TaskVespertino /F -ErrorAction SilentlyContinue | Out-Null
-        Write-Host "   [OK] Tareas de apagado anteriores eliminadas." -ForegroundColor Green
+        Write-Host "   [OK] Tareas de apagado anteriores eliminadas."
+
+        # 2. (NUEVO V8) Eliminar el script de la tarea
+        if (Test-Path $ShutdownScriptFile) {
+            Remove-Item -Path $ShutdownScriptFile -Force -ErrorAction SilentlyContinue
+            Write-Host "   [OK] Script de apagado ($ShutdownScriptFile) eliminado."
+        }
+
     } catch {
         Write-Error "   [ERROR] Falló la eliminación de tareas: $_"
     }
 }
 
-# Función auxiliar para validar la hora
+# Función auxiliar para validar la hora (Sin cambios respecto a V7)
 function Get-ValidatedTime($ShiftName, $StartTime, $EndTime) {
     $StartTimeSpan = [TimeSpan]$StartTime
     $EndTimeSpan = [TimeSpan]$EndTime
@@ -144,36 +163,59 @@ function Get-ValidatedTime($ShiftName, $StartTime, $EndTime) {
     return $ValidTime
 }
 
-# Función principal de aplicación (V7)
+# Función principal de aplicación (ACTUALIZADA V8)
 function Apply-ShutdownTasks {
-    Write-Host ">> Configurando Tareas de Apagado Programado (V7)..." -ForegroundColor Cyan
+    Write-Host ">> Configurando Tareas de Apagado Programado (V8)..." -ForegroundColor Cyan
     
     # 1. Limpiar tareas anteriores
     Revert-ShutdownTasks
     Write-Host ""
 
-    # 2. Definir el script de PowerShell que ejecutarán las tareas (sin cambios)
+    # 2. Definir el script de PowerShell que ejecutarán las tareas
     $PayloadScriptString = @"
 # --- Script de Apagado Progresivo ---
+# Este script es ejecutado por una Tarea Programada como SYSTEM.
+
 # T-10: Primer Aviso
 $Msg10 = "AVISO (10 MIN): La notebook debe ser devuelta. Guarde su trabajo. Se apagará en 10 minutos."
 msg * `$Msg10
 Start-Sleep -Seconds 300 # Esperar 5 min
+
 # T-5: Segundo Aviso
 $Msg5 = "AVISO (5 MIN): Guarde su trabajo. El equipo se apagará en 5 minutos."
 msg * `$Msg5
 Start-Sleep -Seconds 240 # Esperar 4 min
+
 # T-1: Aviso Final
 $Msg1 = "AVISO FINAL (1 MIN): APAGADO INMINENTE. Cierre todo ahora."
 msg * `$Msg1
 Start-Sleep -Seconds 60 # Esperar 1 min
+
 # T-0: Apagado
 shutdown.exe /s /f /t 0
 "@
-    $EncodedPayload = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($PayloadScriptString))
-    $TaskRunCommand = "powershell.exe -WindowStyle Hidden -EncodedCommand $EncodedPayload"
 
-    # 3. Definir límites de los turnos
+    # 3. (NUEVO V8) Guardar el script en un archivo
+    try {
+        # Asegurarse de que el directorio exista (aunque C:\Windows\Temp siempre debería)
+        New-Item -Path (Split-Path $ShutdownScriptFile) -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+        $PayloadScriptString | Out-File -FilePath $ShutdownScriptFile -Encoding utf8 -Force
+        Write-Host "   -> Script de apagado guardado en: $ShutdownScriptFile"
+    } catch {
+        Write-Error "   [ERROR] No se pudo escribir el script en $ShutdownScriptFile. $_"
+        Write-Error "   Saliendo de la configuración de tareas."
+        return
+    }
+
+    # 4. (NUEVO V8) Definir el comando de la tarea (ahora mucho más corto)
+    # Usamos -ExecutionPolicy Bypass para asegurar que se ejecute sin importar la política del sistema.
+    $TaskRunCommand = "powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File ""$ShutdownScriptFile"""
+
+    Write-Host "   -> Comando de Tarea: $TaskRunCommand"
+    # Comprobación de longitud (ya no es necesaria, pero es bueno saberlo)
+    # Write-Host "   -> Longitud del comando: $($TaskRunCommand.Length) caracteres (Límite 261)"
+    
+    # 5. Definir límites de los turnos
     $Shifts = @{
         Mañana = @{ TaskName = $TaskMañana; Start = "07:35"; End = "12:15" }
         Tarde = @{ TaskName = $TaskTarde; Start = "12:25"; End = "17:05" }
@@ -226,7 +268,7 @@ shutdown.exe /s /f /t 0
 # =================================================================
 Clear-Host
 Write-Host "=================================================================" -ForegroundColor Cyan
-Write-Host "      GESTIÓN DE ESTACIONES DE TRABAJO - ESCUELA (V7)"
+Write-Host "      GESTIÓN DE ESTACIONES DE TRABAJO - ESCUELA (V8)"
 Write-Host "=================================================================" -ForegroundColor Cyan
 Write-Host "Seleccione una opción:"
 Write-Host ""
@@ -234,12 +276,12 @@ Write-Host "   [1] Aplicar TODO (Autologon + Chrome + Tareas Apagado)" -Foregrou
 Write-Host "   [2] Revertir TODO (Autologon + Chrome + Tareas Apagado)" -ForegroundColor Yellow
 Write-Host "   -----------------------------------------------------"
 Write-Host "   [3] Solo Aplicar Autologon"
-Write-Host "   [44] Solo Revertir Autologon"
+Write-Host "   [4] Solo Revertir Autologon" # (Corregido error de tipeo V7)
 Write-Host "   -----------------------------------------------------"
 Write-Host "   [5] Solo Aplicar Chrome (Perfiles Efímeros)"
 Write-Host "   [6] Solo Revertir Chrome"
 Write-Host "   -----------------------------------------------------"
-Write-Host "   [7] Aplicar/Actualizar Tareas de Apagado (V7)" -ForegroundColor Magenta
+Write-Host "   [7] Aplicar/Actualizar Tareas de Apagado (V8)" -ForegroundColor Magenta
 Write-Host "   [8] Revertir TODAS las Tareas de Apagado" -ForegroundColor Magenta
 Write-Host "   -----------------------------------------------------"
 Write-Host "   [Q] Salir"
@@ -270,8 +312,8 @@ switch ($choice) {
     '4' { Revert-AutoLogon }
     '5' { Apply-Chrome }
     '6' { Revert-Chrome }
-    '7' { Apply-ShutdownTasks }   # Llama a la función V7
-    '8' { Revert-ShutdownTasks }  # Llama a la función de borrado
+    '7' { Apply-ShutdownTasks }   # Llama a la función V8
+    '8' { Revert-ShutdownTasks }  # Llama a la función de borrado V8
     'Q' { Write-Host "Saliendo sin cambios." -ForegroundColor Gray; exit }
     'q' { Write-Host "Saliendo sin cambios." -ForegroundColor Gray; exit }
     default { Write-Warning "Opción no válida. No se realizaron cambios." }
