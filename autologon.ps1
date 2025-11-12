@@ -1,12 +1,12 @@
 <#
 .SYNOPSIS
-    Script INTERACTIVO MODULAR para configurar O revertir estaciones de trabajo. (V6)
+    Script INTERACTIVO MODULAR para configurar O revertir estaciones de trabajo. (V7)
     
 .DESCRIPTION
     Permite seleccionar individualmente entre aplicar o revertir:
     - Configuración de AutoAdminLogon.
     - Directivas de Google Chrome (Perfiles Efímeros).
-    - Tareas de Apagado Programado (con lógica de 3 turnos y múltiples avisos).
+    - Tareas de Apagado Programado (con validación de hora por turno).
     
     Requiere privilegios de Administrador.
 
@@ -15,7 +15,7 @@
 
 .NOTES
     Autor: Gemini
-    Versión: 6.0
+    Versión: 7.0
 #>
 
 # =================================================================
@@ -41,7 +41,7 @@ $KeyPathAutoLogon = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon
 $ChromePolicyPath = "HKLM:\SOFTWARE\Policies\Google\Chrome"
 $ChromePolicyParentPath = "HKLM:\SOFTWARE\Policies\Google"
 
-# --- (NUEVO) Nombres de tareas de apagado ---
+# --- Nombres de tareas de apagado ---
 $TaskMañana = "SchoolShutdown_Mañana"
 $TaskTarde = "SchoolShutdown_Tarde"
 $TaskVespertino = "SchoolShutdown_Vespertino"
@@ -103,9 +103,9 @@ function Revert-Chrome {
     } catch { Write-Error "   [ERROR] Falló reversión Chrome: $_" }
 }
 
-# --- (ACTUALIZADO) FUNCIONES DE APAGADO PROGRAMADO ---
+# --- (ACTUALIZADO V7) FUNCIONES DE APAGADO PROGRAMADO ---
 
-# Esta es la función de limpieza, se llama desde "Revertir" o "Aplicar"
+# Función de limpieza (no cambia)
 function Revert-ShutdownTasks {
     Write-Host ">> Eliminando Tareas de Apagado Programado existentes..." -ForegroundColor Yellow
     try {
@@ -118,94 +118,99 @@ function Revert-ShutdownTasks {
     }
 }
 
-# Esta es la función de creación
-function Apply-ShutdownTasks {
-    Write-Host ">> Configurando Tareas de Apagado Programado (V6)..." -ForegroundColor Cyan
+# Función auxiliar para validar la hora
+function Get-ValidatedTime($ShiftName, $StartTime, $EndTime) {
+    $StartTimeSpan = [TimeSpan]$StartTime
+    $EndTimeSpan = [TimeSpan]$EndTime
+    $ValidTime = $null
+
+    do {
+        $InputTimeStr = Read-Host "   -> Introduzca la HORA DE APAGADO para el Turno $ShiftName (HH:MM) [ej. $EndTime]"
+        
+        try {
+            $InputTimeSpan = [TimeSpan]::ParseExact($InputTimeStr, "hh\:mm", $null)
+            
+            if ($InputTimeSpan -ge $StartTimeSpan -and $InputTimeSpan -le $EndTimeSpan) {
+                $ValidTime = $InputTimeSpan
+                Write-Host "      Hora válida: $InputTimeStr" -ForegroundColor Green
+            } else {
+                Write-Warning "      Error: La hora '$InputTimeStr' está fuera del rango ($StartTime - $EndTime)."
+            }
+        } catch {
+            Write-Warning "      Error: Formato de hora no válido. Use HH:MM (24hs)."
+        }
+    } while ($ValidTime -eq $null)
     
-    # 1. Limpiar tareas anteriores para empezar de cero
+    return $ValidTime
+}
+
+# Función principal de aplicación (V7)
+function Apply-ShutdownTasks {
+    Write-Host ">> Configurando Tareas de Apagado Programado (V7)..." -ForegroundColor Cyan
+    
+    # 1. Limpiar tareas anteriores
     Revert-ShutdownTasks
     Write-Host ""
 
-    # 2. Definir el script de PowerShell que ejecutarán las tareas
-    # Este script se ejecutará a T-10 minutos
+    # 2. Definir el script de PowerShell que ejecutarán las tareas (sin cambios)
     $PayloadScriptString = @"
 # --- Script de Apagado Progresivo ---
 # T-10: Primer Aviso
 $Msg10 = "AVISO (10 MIN): La notebook debe ser devuelta. Guarde su trabajo. Se apagará en 10 minutos."
 msg * `$Msg10
-
-# Esperar 5 minutos (300 segundos)
-Start-Sleep -Seconds 300 
-
+Start-Sleep -Seconds 300 # Esperar 5 min
 # T-5: Segundo Aviso
 $Msg5 = "AVISO (5 MIN): Guarde su trabajo. El equipo se apagará en 5 minutos."
 msg * `$Msg5
-
-# Esperar 4 minutos (240 segundos)
-Start-Sleep -Seconds 240
-
+Start-Sleep -Seconds 240 # Esperar 4 min
 # T-1: Aviso Final
 $Msg1 = "AVISO FINAL (1 MIN): APAGADO INMINENTE. Cierre todo ahora."
-msg * `$Msg1De
-
-# Esperar 1 minuto (60 segundos)
-Start-Sleep -Seconds 60
-
+msg * `$Msg1
+Start-Sleep -Seconds 60 # Esperar 1 min
 # T-0: Apagado
 shutdown.exe /s /f /t 0
 "@
-
-    # 3. Codificar el script para pasarlo como argumento
     $EncodedPayload = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($PayloadScriptString))
     $TaskRunCommand = "powershell.exe -WindowStyle Hidden -EncodedCommand $EncodedPayload"
 
-    # 4. Definir horas de DISPARO (T-10 minutos)
-    $Horarios = @{
-        Mañana = @{
-            Fin = "12:15"
-            Disparo = "12:05" # T-10 min
-            TaskName = $TaskMañana
-        }
-        Tarde = @{
-            Fin = "17:05"
-            Disparo = "16:55" # T-10 min
-            TaskName = $TaskTarde
-        }
-        Vespertino = @{
-            Fin = "21:40"
-            Disparo = "21:30" # T-10 min
-            TaskName = $TaskVespertino
-        }
+    # 3. Definir límites de los turnos
+    $Shifts = @{
+        Mañana = @{ TaskName = $TaskMañana; Start = "07:35"; End = "12:15" }
+        Tarde = @{ TaskName = $TaskTarde; Start = "12:25"; End = "17:05" }
+        Vespertino = @{ TaskName = $TaskVespertino; Start = "17:15"; End = "21:40" }
     }
 
-    # 5. Menú interactivo para seleccionar turnos
-    Write-Host "Seleccione a qué turnos desea aplicar el apagado automático."
-    Write-Host "La tarea se programará 10 minutos antes del fin del turno."
-    Write-Host ""
-
+    Write-Host "Seleccione los turnos para configurar el apagado automático:"
+    
     try {
-        # Turno Mañana
-        $ChoiceMañana = Read-Host "   - ¿Aplicar al Turno Mañana (fin 12:15)? (s/n)"
-        if ($ChoiceMañana -eq 's') {
-            $H = $Horarios.Mañana
-            Write-Host "     -> Creando tarea '$($H.TaskName)' para las $($H.Disparo)..."
-            schtasks /Create /TN $H.TaskName /TR $TaskRunCommand /SC DAILY /ST $H.Disparo /RU "SYSTEM" /F /RL HIGHEST | Out-Null
+        # --- Configuración Turno Mañana ---
+        if ((Read-Host "   ¿Configurar Turno Mañana (07:35-12:15)? (s/n)") -eq 's') {
+            $Shift = $Shifts.Mañana
+            $ShutdownTime = Get-ValidatedTime "Mañana" $Shift.Start $Shift.End
+            $TriggerTime = $ShutdownTime.Add([TimeSpan]::FromMinutes(-10)).ToString("hh\:mm")
+            
+            Write-Host "     -> Creando tarea '$($Shift.TaskName)' para disparar a las $TriggerTime (Apagado: $($ShutdownTime.ToString("hh\:mm")))"
+            schtasks /Create /TN $Shift.TaskName /TR $TaskRunCommand /SC DAILY /ST $TriggerTime /RU "SYSTEM" /F /RL HIGHEST | Out-Null
         }
 
-        # Turno Tarde
-        $ChoiceTarde = Read-Host "   - ¿Aplicar al Turno Tarde (fin 17:05)? (s/n)"
-        if ($ChoiceTarde -eq 's') {
-            $H = $Horarios.Tarde
-            Write-Host "     -> Creando tarea '$($H.TaskName)' para las $($H.Disparo)..."
-            schtasks /Create /TN $H.TaskName /TR $TaskRunCommand /SC DAILY /ST $H.Disparo /RU "SYSTEM" /F /RL HIGHEST | Out-Null
+        # --- Configuración Turno Tarde ---
+        if ((Read-Host "   ¿Configurar Turno Tarde (12:25-17:05)? (s/n)") -eq 's') {
+            $Shift = $Shifts.Tarde
+            $ShutdownTime = Get-ValidatedTime "Tarde" $Shift.Start $Shift.End
+            $TriggerTime = $ShutdownTime.Add([TimeSpan]::FromMinutes(-10)).ToString("hh\:mm")
+
+            Write-Host "     -> Creando tarea '$($Shift.TaskName)' para disparar a las $TriggerTime (Apagado: $($ShutdownTime.ToString("hh\:mm")))"
+            schtasks /Create /TN $Shift.TaskName /TR $TaskRunCommand /SC DAILY /ST $TriggerTime /RU "SYSTEM" /F /RL HIGHEST | Out-Null
         }
 
-        # Turno Vespertino
-        $ChoiceVespertino = Read-Host "   - ¿Aplicar al Turno Vespertino (fin 21:40)? (s/n)"
-        if ($ChoiceVespertino -eq 's') {
-            $H = $Horarios.Vespertino
-            Write-Host "     -> Creando tarea '$($H.TaskName)' para las $($H.Disparo)..."
-            schtasks /Create /TN $H.TaskName /TR $TaskRunCommand /SC DAILY /ST $H.Disparo /RU "SYSTEM" /F /RL HIGHEST | Out-Null
+        # --- Configuración Turno Vespertino ---
+        if ((Read-Host "   ¿Configurar Turno Vespertino (17:15-21:40)? (s/n)") -eq 's') {
+            $Shift = $Shifts.Vespertino
+            $ShutdownTime = Get-ValidatedTime "Vespertino" $Shift.Start $Shift.End
+            $TriggerTime = $ShutdownTime.Add([TimeSpan]::FromMinutes(-10)).ToString("hh\:mm")
+            
+            Write-Host "     -> Creando tarea '$($Shift.TaskName)' para disparar a las $TriggerTime (Apagado: $($ShutdownTime.ToString("hh\:mm")))"
+            schtasks /Create /TN $Shift.TaskName /TR $TaskRunCommand /SC DAILY /ST $TriggerTime /RU "SYSTEM" /F /RL HIGHEST | Out-Null
         }
         
         Write-Host ""
@@ -216,13 +221,12 @@ shutdown.exe /s /f /t 0
     }
 }
 
-
 # =================================================================
 # SECCIÓN 3: MENÚ INTERACTIVO PRINCIPAL
 # =================================================================
 Clear-Host
 Write-Host "=================================================================" -ForegroundColor Cyan
-Write-Host "      GESTIÓN DE ESTACIONES DE TRABAJO - ESCUELA (V6)"
+Write-Host "      GESTIÓN DE ESTACIONES DE TRABAJO - ESCUELA (V7)"
 Write-Host "=================================================================" -ForegroundColor Cyan
 Write-Host "Seleccione una opción:"
 Write-Host ""
@@ -230,12 +234,12 @@ Write-Host "   [1] Aplicar TODO (Autologon + Chrome + Tareas Apagado)" -Foregrou
 Write-Host "   [2] Revertir TODO (Autologon + Chrome + Tareas Apagado)" -ForegroundColor Yellow
 Write-Host "   -----------------------------------------------------"
 Write-Host "   [3] Solo Aplicar Autologon"
-Write-Host "   [4] Solo Revertir Autologon"
+Write-Host "   [44] Solo Revertir Autologon"
 Write-Host "   -----------------------------------------------------"
 Write-Host "   [5] Solo Aplicar Chrome (Perfiles Efímeros)"
 Write-Host "   [6] Solo Revertir Chrome"
 Write-Host "   -----------------------------------------------------"
-Write-Host "   [7] Aplicar/Actualizar Tareas de Apagado (por Turno)" -ForegroundColor Magenta
+Write-Host "   [7] Aplicar/Actualizar Tareas de Apagado (V7)" -ForegroundColor Magenta
 Write-Host "   [8] Revertir TODAS las Tareas de Apagado" -ForegroundColor Magenta
 Write-Host "   -----------------------------------------------------"
 Write-Host "   [Q] Salir"
@@ -253,7 +257,7 @@ switch ($choice) {
         Write-Host ""
         Apply-Chrome
         Write-Host ""
-        Apply-ShutdownTasks # Esta función es interactiva y preguntará por los turnos
+        Apply-ShutdownTasks # Esta función es interactiva
     }
     '2' { 
         Revert-AutoLogon
@@ -266,7 +270,7 @@ switch ($choice) {
     '4' { Revert-AutoLogon }
     '5' { Apply-Chrome }
     '6' { Revert-Chrome }
-    '7' { Apply-ShutdownTasks }   # Llama a la función de aplicación/actualización
+    '7' { Apply-ShutdownTasks }   # Llama a la función V7
     '8' { Revert-ShutdownTasks }  # Llama a la función de borrado
     'Q' { Write-Host "Saliendo sin cambios." -ForegroundColor Gray; exit }
     'q' { Write-Host "Saliendo sin cambios." -ForegroundColor Gray; exit }
