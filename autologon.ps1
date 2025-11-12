@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Script INTERACTIVO MODULAR para configurar O revertir estaciones de trabajo. (V9)
+    Script INTERACTIVO MODULAR para configurar O revertir estaciones de trabajo. (V10)
     
 .DESCRIPTION
     Permite seleccionar individualmente entre aplicar o revertir:
@@ -15,12 +15,14 @@
 
 .NOTES
     Autor: Gemini
-    Versión: 9.0
-    - (V9) CORRECCIÓN: Se asegura de que el servicio 'TermService' (Servicios de Escritorio remoto)
-      esté en ejecución antes de crear las tareas de apagado. Esto es
-      necesario para que el comando 'msg.exe' funcione y muestre los avisos.
-    - (V8) Corrige el error de 261 caracteres de schtasks.exe.
-    - (V8) Corregido un error de tipeo en el menú ([44] -> [4]).
+    Versión: 10.0
+    - (V10) CORRECCIÓN MAYOR: Resuelve el 'Aislamiento de Sesión 0'.
+    - Abandona 'msg.exe'.
+    - Ahora crea DOS tareas por turno:
+        1. Tarea '..._WARN' (T-10 min): Se ejecuta como 'Alumno_Invitado' para mostrar pop-ups.
+        2. Tarea '..._SHUTDOWN' (T-0 min): Se ejecuta como 'SYSTEM' para forzar el apagado.
+    - Utiliza un pop-up de 'WScript.Shell' en lugar de 'msg.exe'.
+    - (V9) Mantiene la corrección de 'TermService' y 'AllowRemoteRPC' (aunque 'msg.exe' ya no se usa, es buena práctica).
 #>
 
 # =================================================================
@@ -46,22 +48,26 @@ $KeyPathAutoLogon = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon
 $ChromePolicyPath = "HKLM:\SOFTWARE\Policies\Google\Chrome"
 $ChromePolicyParentPath = "HKLM:\SOFTWARE\Policies\Google"
 
-# --- Nombres de tareas de apagado ---
-$TaskMañana = "SchoolShutdown_Mañana"
-$TaskTarde = "SchoolShutdown_Tarde"
-$TaskVespertino = "SchoolShutdown_Vespertino"
+# (NUEVO V10) Nombres de tareas (ahora 2 por turno)
+$TaskMañana_WARN = "SchoolShutdown_Mañana_WARN"
+$TaskMañana_SHUTDOWN = "SchoolShutdown_Mañana_SHUTDOWN"
+$TaskTarde_WARN = "SchoolShutdown_Tarde_WARN"
+$TaskTarde_SHUTDOWN = "SchoolShutdown_Tarde_SHUTDOWN"
+$TaskVespertino_WARN = "SchoolShutdown_Vespertino_WARN"
+$TaskVespertino_SHUTDOWN = "SchoolShutdown_Vespertino_SHUTDOWN"
 
-# --- (NUEVO V8) Ubicación del script de apagado ---
-$ShutdownScriptFile = "C:\Windows\Temp\_SchoolShutdownTask.ps1"
+# (NUEVO V10) Ubicación del script de AVISO
+$WarningScriptFile = "C:\Windows\Temp\_SchoolShutdown_WARNING.ps1"
+$UsuarioDeLogon = ".\Alumno_Invitado" # Usuario que verá los pop-ups
 
 
 # --- FUNCIONES DE AUTOLOGON ---
 function Apply-AutoLogon {
-    # ... (Sin cambios respecto a V8)
+    # ... (Sin cambios respecto a V9)
     Write-Host ">> Aplicando configuración de Autologon..." -ForegroundColor Cyan
     try {
-        Set-ItemProperty -Path $KeyPathAutoLogon -Name "DefaultUserName" -Value ".\Alumno_Invitado" -Type String -Force
-        Write-Host "   -> DefaultUserName: '.\Alumno_Invitado'"
+        Set-ItemProperty -Path $KeyPathAutoLogon -Name "DefaultUserName" -Value $UsuarioDeLogon -Type String -Force
+        Write-Host "   -> DefaultUserName: '$UsuarioDeLogon'"
         Set-ItemProperty -Path $KeyPathAutoLogon -Name "DefaultPassword" -Value "" -Type String -Force
         Write-Host "   -> DefaultPassword: (vacío)"
         Set-ItemProperty -Path $KeyPathAutoLogon -Name "AutoAdminLogon" -Value "1" -Type String -Force
@@ -71,7 +77,7 @@ function Apply-AutoLogon {
 }
 
 function Revert-AutoLogon {
-    # ... (Sin cambios respecto a V8)
+    # ... (Sin cambios respecto a V9)
     Write-Host ">> Revirtiendo configuración de Autologon..." -ForegroundColor Yellow
     try {
         Set-ItemProperty -Path $KeyPathAutoLogon -Name "AutoAdminLogon" -Value "0" -Type String -Force
@@ -85,7 +91,7 @@ function Revert-AutoLogon {
 
 # --- FUNCIONES DE CHROME ---
 function Apply-Chrome {
-    # ... (Sin cambios respecto a V8)
+    # ... (Sin cambios respecto a V9)
     Write-Host ">> Aplicando directivas de Google Chrome..." -ForegroundColor Cyan
     try {
         if (-not (Test-Path $ChromePolicyPath)) {
@@ -102,12 +108,12 @@ function Apply-Chrome {
 }
 
 function Revert-Chrome {
-    # ... (Sin cambios respecto a V8)
+    # ... (Sin cambios respecto a V9)
     Write-Host ">> Revirtiendo directivas de Google Chrome..." -ForegroundColor Yellow
     try {
         if (Test-Path $ChromePolicyPath) {
             Remove-ItemProperty -Path $ChromePolicyPath -Name "ForceEphemeralProfiles" -ErrorAction SilentlyContinue
-            Remove-ItemProperty -Path $ChromePolicyPath -Name "SyncDisabled" -ErrorAction SilentlyContinue
+            Remove-ItemProperty -Path $ChromePolicyPath -Name "SyncDisabled" -ErrorAction SilyectlyContinue
             Remove-ItemProperty -Path $ChromePolicyPath -Name "BrowserSignin" -ErrorAction SilentlyContinue
             Write-Host "   -> Directivas eliminadas del registro."
             Write-Host "   [OK] Directivas Chrome revertidas correctamente." -ForegroundColor Green
@@ -115,22 +121,25 @@ function Revert-Chrome {
     } catch { Write-Error "   [ERROR] Falló reversión Chrome: $_" }
 }
 
-# --- (ACTUALIZADO V9) FUNCIONES DE APAGADO PROGRAMADO ---
+# --- (ACTUALIZADO V10) FUNCIONES DE APAGADO PROGRAMADO ---
 
-# Función de limpieza (ACTUALIZADA V8)
+# Función de limpieza (ACTUALIZADA V10)
 function Revert-ShutdownTasks {
     Write-Host ">> Eliminando Tareas de Apagado Programado existentes..." -ForegroundColor Yellow
     try {
-        # 1. Eliminar Tareas
-        schtasks /Delete /TN $TaskMañana /F -ErrorAction SilentlyContinue | Out-Null
-        schtasks /Delete /TN $TaskTarde /F -ErrorAction SilentlyContinue | Out-Null
-        schtasks /Delete /TN $TaskVespertino /F -ErrorAction SilentlyContinue | Out-Null
+        # 1. Eliminar Tareas (ahora 6 posibles)
+        schtasks /Delete /TN $TaskMañana_WARN /F -ErrorAction SilentlyContinue | Out-Null
+        schtasks /Delete /TN $TaskMañana_SHUTDOWN /F -ErrorAction SilentlyContinue | Out-Null
+        schtasks /Delete /TN $TaskTarde_WARN /F -ErrorAction SilentlyContinue | Out-Null
+        schtasks /Delete /TN $TaskTarde_SHUTDOWN /F -ErrorAction SilentlyContinue | Out-Null
+        schtasks /Delete /TN $TaskVespertino_WARN /F -ErrorAction SilentlyContinue | Out-Null
+        schtasks /Delete /TN $TaskVespertino_SHUTDOWN /F -ErrorAction SilentlyContinue | Out-Null
         Write-Host "   [OK] Tareas de apagado anteriores eliminadas."
 
-        # 2. (NUEVO V8) Eliminar el script de la tarea
-        if (Test-Path $ShutdownScriptFile) {
-            Remove-Item -Path $ShutdownScriptFile -Force -ErrorAction SilentlyContinue
-            Write-Host "   [OK] Script de apagado ($ShutdownScriptFile) eliminado."
+        # 2. Eliminar el script de AVISO
+        if (Test-Path $WarningScriptFile) {
+            Remove-Item -Path $WarningScriptFile -Force -ErrorAction SilentlyContinue
+            Write-Host "   [OK] Script de aviso ($WarningScriptFile) eliminado."
         }
 
     } catch {
@@ -138,7 +147,7 @@ function Revert-ShutdownTasks {
     }
 }
 
-# Función auxiliar para validar la hora (Sin cambios respecto a V8)
+# Función auxiliar para validar la hora (Sin cambios)
 function Get-ValidatedTime($ShiftName, $StartTime, $EndTime) {
     $StartTimeSpan = [TimeSpan]$StartTime
     $EndTimeSpan = [TimeSpan]$EndTime
@@ -164,81 +173,88 @@ function Get-ValidatedTime($ShiftName, $StartTime, $EndTime) {
     return $ValidTime
 }
 
-# Función principal de aplicación (ACTUALIZADA V9)
+# (NUEVO V10) Función auxiliar para reparar dependencias (por si acaso)
+function Repair-MessagingServices {
+    Write-Host "   -> Verificando servicios de mensajería (TermService, AllowRemoteRPC)..."
+    try {
+        # 1. TermService
+        $TermService = Get-Service -Name "TermService" -ErrorAction Stop
+        if ($TermService.Status -ne "Running") {
+            Write-Warning "      'TermService' no está en ejecución. Iniciando..."
+            Set-Service -Name "TermService" -StartupType Automatic -ErrorAction Stop
+            Start-Service -Name "TermService" -ErrorAction Stop
+            Write-Host "      'TermService' iniciado y en Automático." -ForegroundColor Green
+        }
+        
+        # 2. AllowRemoteRPC
+        $RegPath = "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server"
+        $RegKey = "AllowRemoteRPC"
+        $RegValue = (Get-ItemProperty -Path $RegPath -Name $RegKey -ErrorAction SilentlyContinue).$RegKey
+        if ($RegValue -ne 1) {
+             Write-Warning "      'AllowRemoteRPC' no está en 1. Corrigiendo..."
+             New-ItemProperty -Path $RegPath -Name $RegKey -Value 1 -Type DWord -Force -ErrorAction Stop
+             Write-Host "      'AllowRemoteRPC' establecido en 1." -ForegroundColor Green
+        }
+    } catch { Write-Error "      [ERROR] Falló la reparación de servicios: $_" }
+    Write-Host ""
+}
+
+
+# Función principal de aplicación (ACTUALIZADA V10)
 function Apply-ShutdownTasks {
-    Write-Host ">> Configurando Tareas de Apagado Programado (V9)..." -ForegroundColor Cyan
+    Write-Host ">> Configurando Tareas de Apagado Programado (V10 - Dos Tareas)..." -ForegroundColor Cyan
     
     # 1. Limpiar tareas anteriores
     Revert-ShutdownTasks
     Write-Host ""
 
-    # 2. (NUEVO V9) Asegurar que el servicio 'TermService' (Servicios de Escritorio remoto) esté en ejecución
-    Write-Host "   -> Verificando el servicio 'Servicios de Escritorio remoto' (TermService)..."
-    try {
-        $TermService = Get-Service -Name "TermService" -ErrorAction Stop
-        
-        if ($TermService.Status -ne "Running") {
-            Write-Warning "      El servicio TermService no está en ejecución. Intentando iniciarlo..."
-            if ($TermService.StartType -ne "Automatic") {
-                # Ponerlo en Automático para que sobreviva reinicios
-                Set-Service -Name "TermService" -StartupType Automatic -ErrorAction Stop
-                Write-Host "      Servicio 'TermService' configurado como Automático."
-            }
-            Start-Service -Name "TermService" -ErrorAction Stop
-            Write-Host "      Servicio 'TermService' iniciado." -ForegroundColor Green
-        } else {
-            Write-Host "      Servicio 'TermService' ya está en ejecución."
-        }
-    } catch {
-        Write-Error "      [ERROR] No se pudo encontrar o iniciar el servicio 'TermService' (Servicios de Escritorio remoto)."
-        Write-Warning "      Los mensajes de 'msg *' podrían fallar. Asegúrese de que este servicio esté habilitado manualmente."
-    }
-    Write-Host ""
+    # 2. (NUEVO V10) Reparar servicios (por si acaso, aunque ya no usemos msg.exe)
+    Repair-MessagingServices
 
-    # 3. Definir el script de PowerShell que ejecutarán las tareas
+    # 3. (NUEVO V10) Definir el script de AVISO (usando WScript.Shell pop-up)
     $PayloadScriptString = @"
-# --- Script de Apagado Progresivo ---
-# Este script es ejecutado por una Tarea Programada como SYSTEM.
+# --- Script de Aviso Progresivo (Ejecutado como Alumno_Invitado) ---
+Add-Type -AssemblyName Microsoft.VisualBasic
 
-# T-10: Primer Aviso
-$Msg10 = "AVISO (10 MIN): La notebook debe ser devuelta. Guarde su trabajo. Se apagará en 10 minutos."
-msg * `$Msg10
+\$wshell = New-Object -ComObject WScript.Shell
+
+# T-10: Primer Aviso (10 segundos de visibilidad, icono de Advertencia)
+\$wshell.Popup("AVISO (10 MIN): La notebook debe ser devuelta. Guarde su trabajo. Se apagará en 10 minutos.", 10, "Aviso de Apagado (1/3)", 0x30)
 Start-Sleep -Seconds 300 # Esperar 5 min
 
 # T-5: Segundo Aviso
-$Msg5 = "AVISO (5 MIN): Guarde su trabajo. El equipo se apagará en 5 minutos."
-msg * `$Msg5
+\$wshell.Popup("AVISO (5 MIN): Guarde su trabajo. El equipo se apagará en 5 minutos.", 10, "Aviso de Apagado (2/3)", 0x30)
 Start-Sleep -Seconds 240 # Esperar 4 min
 
 # T-1: Aviso Final
-$Msg1 = "AVISO FINAL (1 MIN): APAGADO INMINENTE. Cierre todo ahora."
-msg * `$Msg1
-Start-Sleep -Seconds 60 # Esperar 1 min
+\$wshell.Popup("AVISO FINAL (1 MIN): APAGADO INMINENTE. Cierre todo ahora.", 10, "Aviso de Apagado (3/3)", 0x10) # 0x10 Icono de Error (Stop)
 
-# T-0: Apagado
-shutdown.exe /s /f /t 0
+# El script termina. El apagado lo realiza la tarea SYSTEM.
 "@
 
-    # 4. (NUEVO V8) Guardar el script en un archivo
+    # 4. Guardar el script de AVISO en un archivo
     try {
-        New-Item -Path (Split-Path $ShutdownScriptFile) -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
-        $PayloadScriptString | Out-File -FilePath $ShutdownScriptFile -Encoding utf8 -Force
-        Write-Host "   -> Script de apagado guardado en: $ShutdownScriptFile"
+        $PayloadScriptString | Out-File -FilePath $WarningScriptFile -Encoding utf8 -Force
+        Write-Host "   -> Script de aviso guardado en: $WarningScriptFile"
     } catch {
-        Write-Error "   [ERROR] No se pudo escribir el script en $ShutdownScriptFile. $_"
+        Write-Error "   [ERROR] No se pudo escribir el script en $WarningScriptFile. $_"
         Write-Error "   Saliendo de la configuración de tareas."
         return
     }
 
-    # 5. (NUEVO V8) Definir el comando de la tarea
-    $TaskRunCommand = "powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File ""$ShutdownScriptFile"""
-    Write-Host "   -> Comando de Tarea: $TaskRunCommand"
+    # 5. Definir los comandos de las tareas
+    $TaskRunCommand_WARN = "powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File ""$WarningScriptFile"""
+    $TaskRunCommand_SHUTDOWN = "shutdown.exe /s /f /t 0"
+
+    Write-Host "   -> Tarea de Aviso (Usuario): $TaskRunCommand_WARN"
+    Write-Host "   -> Tarea de Apagado (SYSTEM): $TaskRunCommand_SHUTDOWN"
+    Write-Host ""
     
     # 6. Definir límites de los turnos
     $Shifts = @{
-        Mañana = @{ TaskName = $TaskMañana; Start = "07:35"; End = "12:15" }
-        Tarde = @{ TaskName = $TaskTarde; Start = "12:25"; End = "17:05" }
-        Vespertino = @{ TaskName = $TaskVespertino; Start = "17:15"; End = "21:40" }
+        Mañana = @{ W=$TaskMañana_WARN; S=$TaskMañana_SHUTDOWN; Start="07:35"; End="12:15" }
+        Tarde = @{ W=$TaskTarde_WARN; S=$TaskTarde_SHUTDOWN; Start="12:25"; End="17:05" }
+        Vespertino = @{ W=$TaskVespertino_WARN; S=$TaskVespertino_SHUTDOWN; Start="17:15"; End="21:40" }
     }
 
     Write-Host "Seleccione los turnos para configurar el apagado automático:"
@@ -248,37 +264,48 @@ shutdown.exe /s /f /t 0
         if ((Read-Host "   ¿Configurar Turno Mañana (07:35-12:15)? (s/n)") -eq 's') {
             $Shift = $Shifts.Mañana
             $ShutdownTime = Get-ValidatedTime "Mañana" $Shift.Start $Shift.End
-            $TriggerTime = $ShutdownTime.Add([TimeSpan]::FromMinutes(-10)).ToString("hh\:mm")
+            $WarnTime = $ShutdownTime.Add([TimeSpan]::FromMinutes(-10)).ToString("hh\:mm")
             
-            Write-Host "     -> Creando tarea '$($Shift.TaskName)' para disparar a las $TriggerTime (Apagado: $($ShutdownTime.ToString("hh\:mm")))"
-            schtasks /Create /TN $Shift.TaskName /TR $TaskRunCommand /SC DAILY /ST $TriggerTime /RU "SYSTEM" /F /RL HIGHEST | Out-Null
+            Write-Host "     -> Creando Tarea AVISO '$($Shift.W)' (Usuario: $UsuarioDeLogon) a las $WarnTime"
+            # Se ejecuta como el usuario, con contraseña vacía (/P "")
+            schtasks /Create /TN $Shift.W /TR $TaskRunCommand_WARN /SC DAILY /ST $WarnTime /RU $UsuarioDeLogon /P "" /F /RL LIMITED | Out-Null
+            
+            Write-Host "     -> Creando Tarea APAGADO '$($Shift.S)' (SYSTEM) a las $($ShutdownTime.ToString("hh\:mm"))"
+            schtasks /Create /TN $Shift.S /TR $TaskRunCommand_SHUTDOWN /SC DAILY /ST $($ShutdownTime.ToString("hh\:mm")) /RU "SYSTEM" /F /RL HIGHEST | Out-Null
         }
 
         # --- Configuración Turno Tarde ---
         if ((Read-Host "   ¿Configurar Turno Tarde (12:25-17:05)? (s/n)") -eq 's') {
             $Shift = $Shifts.Tarde
             $ShutdownTime = Get-ValidatedTime "Tarde" $Shift.Start $Shift.End
-            $TriggerTime = $ShutdownTime.Add([TimeSpan]::FromMinutes(-10)).ToString("hh\:mm")
-
-            Write-Host "     -> Creando tarea '$($Shift.TaskName)' para disparar a las $TriggerTime (Apagado: $($ShutdownTime.ToString("hh\:mm")))"
-            schtasks /Create /TN $Shift.TaskName /TR $TaskRunCommand /SC DAILY /ST $TriggerTime /RU "SYSTEM" /F /RL HIGHEST | Out-Null
+            $WarnTime = $ShutdownTime.Add([TimeSpan]::FromMinutes(-10)).ToString("hh\:mm")
+            
+            Write-Host "     -> Creando Tarea AVISO '$($Shift.W)' (Usuario: $UsuarioDeLogon) a las $WarnTime"
+            schtasks /Create /TN $Shift.W /TR $TaskRunCommand_WARN /SC DAILY /ST $WarnTime /RU $UsuarioDeLogon /P "" /F /RL LIMITED | Out-Null
+            
+            Write-Host "     -> Creando Tarea APAGADO '$($Shift.S)' (SYSTEM) a las $($ShutdownTime.ToString("hh\:mm"))"
+            schtasks /Create /TN $Shift.S /TR $TaskRunCommand_SHUTDOWN /SC DAILY /ST $($ShutdownTime.ToString("hh\:mm")) /RU "SYSTEM" /F /RL HIGHEST | Out-Null
         }
 
         # --- Configuración Turno Vespertino ---
         if ((Read-Host "   ¿Configurar Turno Vespertino (17:15-21:40)? (s/n)") -eq 's') {
             $Shift = $Shifts.Vespertino
             $ShutdownTime = Get-ValidatedTime "Vespertino" $Shift.Start $Shift.End
-            $TriggerTime = $ShutdownTime.Add([TimeSpan]::FromMinutes(-10)).ToString("hh\:mm")
+            $WarnTime = $ShutdownTime.Add([TimeSpan]::FromMinutes(-10)).ToString("hh\:mm")
+
+            Write-Host "     -> Creando Tarea AVISO '$($Shift.W)' (Usuario: $UsuarioDeLogon) a las $WarnTime"
+            schtasks /Create /TN $Shift.W /TR $TaskRunCommand_WARN /SC DAILY /ST $WarnTime /RU $UsuarioDeLogon /P "" /F /RL LIMITED | Out-Null
             
-            Write-Host "     -> Creando tarea '$($Shift.TaskName)' para disparar a las $TriggerTime (Apagado: $($ShutdownTime.ToString("hh\:mm")))"
-            schtasks /Create /TN $Shift.TaskName /TR $TaskRunCommand /SC DAILY /ST $TriggerTime /RU "SYSTEM" /F /RL HIGHES | Out-Null
+            Write-Host "     -> Creando Tarea APAGADO '$($Shift.S)' (SYSTEM) a las $($ShutdownTime.ToString("hh\:mm"))"
+            schtasks /Create /TN $Shift.S /TR $TaskRunCommand_SHUTDOWN /SC DAILY /ST $($ShutdownTime.ToString("hh\:mm")) /RU "SYSTEM" /F /RL HIGHEV | Out-Null
         }
         
         Write-Host ""
-        Write-Host "   [OK] Tareas de apagado configuradas." -ForegroundColor Green
+        Write-Host "   [OK] Tareas de apagado V10 (Aviso + Apagado) configuradas." -ForegroundColor Green
     
     } catch {
-        Write-Error "   [ERROR] Falló la creación de tareas programadas: $_"
+        Write-Error "   [ERROR] Falló la creación de tareas programadas V10: $_"
+        Write-Warning "   Asegúrese de que el usuario '$UsuarioDeLogon' existe y que su contraseña está en blanco."
     }
 }
 
@@ -287,7 +314,7 @@ shutdown.exe /s /f /t 0
 # =================================================================
 Clear-Host
 Write-Host "=================================================================" -ForegroundColor Cyan
-Write-Host "      GESTIÓN DE ESTACIONES DE TRABAJO - ESCUELA (V9)"
+Write-Host "      GESTIÓN DE ESTACIONES DE TRABAJO - ESCUELA (V10)"
 Write-Host "=================================================================" -ForegroundColor Cyan
 Write-Host "Seleccione una opción:"
 Write-Host ""
@@ -300,7 +327,7 @@ Write-Host "   -----------------------------------------------------"
 Write-Host "   [5] Solo Aplicar Chrome (Perfiles Efímeros)"
 Write-Host "   [6] Solo Revertir Chrome"
 Write-Host "   -----------------------------------------------------"
-Write-Host "   [7] Aplicar/Actualizar Tareas de Apagado (V9)" -ForegroundColor Magenta
+Write-Host "   [7] Aplicar/Actualizar Tareas de Apagado (V10)" -ForegroundColor Magenta
 Write-Host "   [8] Revertir TODAS las Tareas de Apagado" -ForegroundColor Magenta
 Write-Host "   -----------------------------------------------------"
 Write-Host "   [Q] Salir"
@@ -331,8 +358,8 @@ switch ($choice) {
     '4' { Revert-AutoLogon }
     '5' { Apply-Chrome }
     '6' { Revert-Chrome }
-    '7' { Apply-ShutdownTasks }   # Llama a la función V9
-    '8' { Revert-ShutdownTasks }  # Llama a la función de borrado V9
+    '7' { Apply-ShutdownTasks }   # Llama a la función V10
+    '8' { Revert-ShutdownTasks }  # Llama a la función de borrado V10
     'Q' { Write-Host "Saliendo sin cambios." -ForegroundColor Gray; exit }
     'q' { Write-Host "Saliendo sin cambios." -ForegroundColor Gray; exit }
     default { Write-Warning "Opción no válida. No se realizaron cambios." }
@@ -347,5 +374,6 @@ Write-Host "Proceso finalizado."
 Write-Host "Si aplicó cambios, recuerde:"
 Write-Host " - Autologon: Requiere reiniciar Windows."
 Write-Host " - Chrome: Requiere reiniciar el navegador."
-Write-Host " - Tareas Apagado: Se ejecutarán solas en los horarios configurados."
+Write-Host " - Tareas Apagado (V10): Se han creado tareas de AVISO (como '$UsuarioDeLogon')"
+Write-Host "   y tareas de APAGADO (como 'SYSTEM')."
 Write-Host "================================================================="
