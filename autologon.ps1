@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Script INTERACTIVO MODULAR para configurar O revertir estaciones de trabajo. (V12)
+    Script INTERACTIVO MODULAR para configurar O revertir estaciones de trabajo. (V12.1)
     
 .DESCRIPTION
     Permite seleccionar individualmente entre aplicar o revertir:
