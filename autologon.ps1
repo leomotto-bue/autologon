@@ -63,7 +63,7 @@ $TaskVespertino_SHUTDOWN = "SchoolShutdown_Vespertino_SHUTDOWN"
 # (V12) Nuevas rutas de archivos
 $WarningScriptFile = "C:\Windows\Temp\_SchoolShutdown_WARNING.ps1"
 $WarningLauncherFile = "C:\Windows\Temp\_SchoolShutdown_LAUNCHER.vbs" # (NUEVO V12)
-$UsuarioDeLogon = "Alumno_Invitado" 
+$UsuarioDeLogon = ".\Alumno_Invitado" 
 
 
 # --- FUNCIONES DE AUTOLOGON ---
